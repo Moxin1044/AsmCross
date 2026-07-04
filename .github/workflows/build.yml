@@ -1,0 +1,62 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'Crosshair.asm'
+      - 'build.bat'
+      - '.github/workflows/build.yml'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Assemble & Link (x86)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup MSVC x86 dev environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x86
+
+      - name: Assemble Crosshair.asm
+        shell: cmd
+        run: ml /c /coff /Cp /nologo Crosshair.asm
+
+      - name: Link Crosshair.exe
+        shell: cmd
+        run: >-
+          link /SUBSYSTEM:WINDOWS /ENTRY:start /NODEFAULTLIB /MACHINE:X86
+          /NXCOMPAT /DYNAMICBASE /nologo
+          /STACK:262144,4096 /HEAP:262144,4096
+          /OUT:Crosshair.exe
+          Crosshair.obj kernel32.lib user32.lib gdi32.lib
+
+      - name: Verify PE header
+        shell: pwsh
+        run: |
+          if (-not (Test-Path .\Crosshair.exe)) { Write-Error "Crosshair.exe not found"; exit 1 }
+          $bytes = [System.IO.File]::ReadAllBytes("Crosshair.exe")
+          $peOff = [BitConverter]::ToInt32($bytes, 0x3C)
+          $machine = [BitConverter]::ToUInt16($bytes, $peOff + 4)
+          $subsys = [BitConverter]::ToUInt16($bytes, $peOff + 0x5C)
+          $size = (Get-Item .\Crosshair.exe).Length
+          Write-Output ("Size      = $size bytes")
+          Write-Output ("Machine   = 0x{0:X4} (expect 0x14C = x86)" -f $machine)
+          Write-Output ("Subsystem = $subsys (expect 2 = Windows GUI)")
+          if ($machine -ne 0x14C) { Write-Error "Wrong machine"; exit 1 }
+          if ($subsys -ne 2)      { Write-Error "Wrong subsystem"; exit 1 }
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Crosshair-exe
+          path: Crosshair.exe
+          if-no-files-found: error
+          retention-days: 30
